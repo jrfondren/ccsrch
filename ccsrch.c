@@ -95,7 +95,7 @@ static void initialize_buffer()
 static void mask_pan(char *s)
 {
   /* Make the PAN number; probably a better way to do this */
-  int j;
+  size_t j;
 
   for (j=0; s[j]!='\0'; j++) {
     if (j > 3 && j < strlen(s) - 6)
@@ -841,10 +841,25 @@ static char *read_ignore_list(const char *filename, size_t *len)
 
 static void split_ignore_list(char *buf, size_t len)
 {
-  int i;
+  size_t i;
   for (i=0; i<len; i++) {
     if (buf[i] == '\n')
       buf[i] = ' ';
+  }
+}
+
+static void chomp(char *buf)
+{
+  int b;
+  for (;;) {
+    b = *buf;
+    if (b == '\0')
+      return;
+    if (b == '\n' || b == '\r') {
+      *buf = '\0';
+      return;
+    }
+    buf++;
   }
 }
 
@@ -911,10 +926,7 @@ int scanpath(char *inbuf)
 
 int main(int argc, char *argv[])
 {
-  char       *inputstr      = NULL;
-  char       *inbuf         = NULL;
   char       *tracktype_str = NULL;
-  char       *linebuf_nl    = NULL;
   char       linebuf[8192];
   int         c              = 0;
   int         limit_arg      = 0;
@@ -1020,18 +1032,14 @@ int main(int argc, char *argv[])
   if (dirs_from_stdin) {
     printf("Reading dirs from standard input...\n");
     while (fgets(linebuf, sizeof linebuf, stdin) != NULL) {
-      linebuf_nl = index(linebuf, '\n');
-      if (linebuf_nl != NULL)
-        *linebuf_nl = '\0';
+      chomp(linebuf);
       // success is 0 if any result is 0
       success &= scanpath(linebuf);
     }
   } else if (files_from_stdin) {
     printf("Reading filenames from standard input...\n");
     while (fgets(linebuf, sizeof linebuf, stdin) != NULL) {
-      linebuf_nl = index(linebuf, '\n');
-      if (linebuf_nl != NULL)
-        *linebuf_nl = '\0';
+      chomp(linebuf);
       if (is_allowed_file_type(linebuf) != 0) // inverted bool
         continue;
       file_hit_count = 0;
