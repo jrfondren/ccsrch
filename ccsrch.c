@@ -39,7 +39,10 @@
   #define SIGQUIT 3
 #endif
 
-#define PROG_VER "ccsrch 1.0.9 (c) 2012-2016 Adam Caudill <adam@adamcaudill.com>\n             (c) 2007 Mike Beekey <zaphod2718@yahoo.com>"
+#define PROG_VER \
+"ccsrch 1.1.0 (C) 2024 Julian Fondren <julian.fondren@newfold.com>\n" \
+"             (C) 2012-2016 Adam Caudill <adam@adamcaudill.com>\n" \
+"             (C) 2007 Mike Beekey <zaphod2718@yahoo.com>"
 
 #define MDBUFSIZE    512
 #define MAXPATH     2048
@@ -79,6 +82,9 @@ static int    status_msglength     = 0;
 static int    mask_card_number     = 0;
 static int    limit_ascii          = 0;
 static int    ignore_count         = 0;
+static int    dirs_from_stdin      = 0;
+static int    files_from_stdin     = 0;
+static int    print_csv            = 0;
 
 static void initialize_buffer()
 {
@@ -168,6 +174,9 @@ static void print_result(const char *cardname, int cardlen, long byte_offset)
 
   if (print_filename_only) {
     snprintf(basebuf, MDBUFSIZE, "%s", currfilename);
+  } else if (print_csv) {
+    // currfilename at the end so CSV is easier to repair if a filename has commas
+    snprintf(basebuf, MDBUFSIZE, "%s,%s,%s", nbuf, cardname, currfilename);
   } else {
     snprintf(basebuf, MDBUFSIZE, "%s\t%s\t%s", currfilename, cardname, nbuf);
   }
@@ -760,6 +769,9 @@ static void usage(const char *progname)
   printf("%s\n", PROG_VER);
   printf("Usage: %s <options> <start path>\n", progname);
   printf("  where <options> are:\n");
+  printf("    -D\t\t   Take directory paths to scan from stdin\n");
+  printf("    -F\t\t   Take filenames to scan from stdin\n");
+  printf("    -C\t\t   CSV output\n");
   printf("    -a\t\t   Limit to ascii files.\n");
   printf("    -b\t\t   Add the byte offset into the file of the number\n");
   printf("    -e\t\t   Include the Modify Access and Create times in terms \n\t\t   of seconds since the epoch\n");
@@ -835,23 +847,93 @@ static void split_ignore_list(char *buf, size_t len)
   }
 }
 
-int main(int argc, char *argv[])
+int scanpath(char *inbuf)
 {
   struct stat	ffstat;
+  int         err            = 0;
+  char        tmpbuf[BSIZE];
+
+  if (check_dir(inbuf)) {
+#ifdef WINDOWS
+    if ((inbuf[strlen(inbuf) - 1]) != '\\')
+      inbuf[strlen(inbuf)] = '\\';
+#else
+    if ((inbuf[strlen(inbuf) - 1]) != '/')
+      inbuf[strlen(inbuf)] = '/';
+#endif
+    proc_dir_list(inbuf);
+  } else {
+    err = get_file_stat(inbuf, &ffstat);
+    if (err == -1) {
+      if (errno == ENOENT) {
+        fprintf(stderr, "File %s not found, can't stat\n", inbuf);
+      } else {
+        fprintf(stderr, "Cannot stat file %s; errno=%d\n", inbuf, errno);
+      }
+      return 0;
+    }
+
+    if ((ffstat.st_size > 0) && ((ffstat.st_mode & S_IFMT) == S_IFREG)) {
+      memset(&tmpbuf, '\0', BSIZE);
+      if (escape_space(inbuf, tmpbuf) == 0) {
+        if (logfilename != NULL) {
+          if (strstr(inbuf, logfilename) != NULL) {
+            fprintf(stderr, "main: We seem to be hitting our log file, so we'll leave this out of the search -> %s\n", inbuf);
+          } else {
+#ifdef DEBUG
+            printf("Processing file %s\n",inbuf);
+#endif
+            ccsrch(inbuf);
+          }
+        } else {
+#ifdef DEBUG
+          printf("Processing file %s\n",inbuf);
+#endif
+          ccsrch(inbuf);
+        }
+      }
+    } else if ((ffstat.st_mode & S_IFMT) == S_IFDIR) {
+#ifdef WINDOWS
+      if ((inbuf[strlen(inbuf) - 1]) != '\\')
+        inbuf[strlen(inbuf)] = '\\';
+#else
+      if ((inbuf[strlen(inbuf) - 1]) != '/')
+        inbuf[strlen(inbuf)] = '/';
+#endif
+      proc_dir_list(inbuf);
+    } else {
+      fprintf(stderr, "main: Unknown mode returned-> %x\n", ffstat.st_mode);
+    }
+  }
+  return 1;
+}
+
+int main(int argc, char *argv[])
+{
   char       *inputstr      = NULL;
   char       *inbuf         = NULL;
   char       *tracktype_str = NULL;
-  char        tmpbuf[BSIZE];
-  int         err            = 0;
+  char       *linebuf_nl    = NULL;
+  char       linebuf[8192];
   int         c              = 0;
   int         limit_arg      = 0;
+  int         success        = 1; // boolean, not exit code
   size_t      len;
 
   if (argc < 2)
     usage(argv[0]);
 
-  while ((c = getopt(argc, argv,"abefi:jt:To:cml:n:s")) != -1) {
+  while ((c = getopt(argc, argv,"abefi:jt:To:cml:n:sDFC")) != -1) {
       switch (c) {
+        case 'D':
+          dirs_from_stdin = 1;
+          break;
+        case 'F':
+          files_from_stdin = 1;
+          break;
+        case 'C':
+          print_csv = 1;
+          break;
         case 'a':
           limit_ascii = 1;
           break;
@@ -927,76 +1009,46 @@ int main(int argc, char *argv[])
   	print_file_hit_count = 0;
   }
 
-  inputstr = argv[optind];
-  if (inputstr == NULL)
-    usage(argv[0]);
-
   if (open_logfile() < 0)
     exit(-1);
-
-  inbuf = strdup(inputstr);
-  if (inbuf == NULL) {
-    fprintf(stderr, "strdup: cannot allocate memory erro=%d\n", errno);
-    cleanup_shtuff();
-  }
   signal_proc();
-
   init_time = time(NULL);
   printf("\n%s\n", PROG_VER);
   printf("\nLocal start time: %s\n",ctime((time_t *)&init_time));
-  if (check_dir(inbuf)) {
-#ifdef WINDOWS
-    if ((inbuf[strlen(inbuf) - 1]) != '\\')
-      inbuf[strlen(inbuf)] = '\\';
-#else
-    if ((inbuf[strlen(inbuf) - 1]) != '/')
-      inbuf[strlen(inbuf)] = '/';
-#endif
-    proc_dir_list(inbuf);
+
+  if (dirs_from_stdin) {
+    printf("Reading dirs from standard input...\n");
+    while (fgets(linebuf, sizeof linebuf, stdin) != NULL) {
+      linebuf_nl = index(linebuf, '\n');
+      if (linebuf_nl != NULL)
+        *linebuf_nl = '\0';
+      // success is 0 if any result is 0
+      success &= scanpath(linebuf);
+    }
+  } else if (files_from_stdin) {
+    printf("Reading filenames from standard input...\n");
+    while (fgets(linebuf, sizeof linebuf, stdin) != NULL) {
+      linebuf_nl = index(linebuf, '\n');
+      if (linebuf_nl != NULL)
+        *linebuf_nl = '\0';
+      if (is_allowed_file_type(linebuf) != 0) // inverted bool
+        continue;
+      file_hit_count = 0;
+      ccsrch(linebuf);
+      if (file_hit_count > 0 && print_file_hit_count == 1)
+        printf("%s: %d hits\n", linebuf, file_hit_count);
+    }
   } else {
-    err = get_file_stat(inbuf, &ffstat);
-    if (err == -1) {
-      if (errno == ENOENT) {
-        fprintf(stderr, "File %s not found, can't stat\n", inbuf);
-      } else {
-        fprintf(stderr, "Cannot stat file %s; errno=%d\n", inbuf, errno);
-      }
+    if (argv[optind] == NULL)
+      usage(argv[0]);
+    if (strlen(argv[optind]) >= sizeof linebuf) {
+      fprintf(stderr, "main: Argument too long\n");
+      cleanup_shtuff();
       exit(-1);
     }
-
-    if ((ffstat.st_size > 0) && ((ffstat.st_mode & S_IFMT) == S_IFREG)) {
-      memset(&tmpbuf, '\0', BSIZE);
-      if (escape_space(inbuf, tmpbuf) == 0) {
-        if (logfilename != NULL) {
-          if (strstr(inbuf, logfilename) != NULL) {
-            fprintf(stderr, "main: We seem to be hitting our log file, so we'll leave this out of the search -> %s\n", inbuf);
-          } else {
-#ifdef DEBUG
-            printf("Processing file %s\n",inbuf);
-#endif
-            ccsrch(inbuf);
-          }
-        } else {
-#ifdef DEBUG
-          printf("Processing file %s\n",inbuf);
-#endif
-          ccsrch(inbuf);
-        }
-      }
-    } else if ((ffstat.st_mode & S_IFMT) == S_IFDIR) {
-#ifdef WINDOWS
-      if ((inbuf[strlen(inbuf) - 1]) != '\\')
-        inbuf[strlen(inbuf)] = '\\';
-#else
-      if ((inbuf[strlen(inbuf) - 1]) != '/')
-        inbuf[strlen(inbuf)] = '/';
-#endif
-      proc_dir_list(inbuf);
-    } else {
-      fprintf(stderr, "main: Unknown mode returned-> %x\n", ffstat.st_mode);
-    }
+    strncpy(linebuf, argv[optind], strlen(argv[optind])+2);
+    success = scanpath(linebuf);
   }
-  free(inbuf);
   cleanup_shtuff();
-  return 0;
+  return success ? 0 : 1;
 }
