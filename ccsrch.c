@@ -1,6 +1,7 @@
 /*
- * ccsrch (c) 2012-2016 Adam Caudill <adam@adamcaudill.com>
- *        (c) 2007 Mike Beekey <zaphod2718@yahoo.com>
+ * ccsrch 1.1.0 (C) 2024 Julian Fondren <julian.fondren@newfold.com>
+ *              (C) 2012-2016 Adam Caudill <adam@adamcaudill.com>
+ *              (C) 2007 Mike Beekey <zaphod2718@yahoo.com>
  *
  * All rights reserved.
  *
