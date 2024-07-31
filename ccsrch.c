@@ -87,7 +87,12 @@ static int    dirs_from_stdin      = 0;
 static int    files_from_stdin     = 0;
 static int    print_csv            = 0;
 
-static void initialize_buffer()
+static void initialize_buffer(void);
+static void cleanup_shtuff(int);
+static void signal_proc(void);
+static int open_logfile(void);
+
+static void initialize_buffer(void)
 {
   memset(cardbuf, 0, CARDSIZE);
 }
@@ -741,8 +746,9 @@ static int proc_dir_list(const char *instr)
   return 0;
 }
 
-static void cleanup_shtuff()
+static void cleanup_shtuff(int ignored)
 {
+  (void)ignored;
   time_t end_time = time(NULL);
   printf("\n\nFiles searched ->\t\t%ld\n", file_count);
   printf("Search time (seconds) ->\t%ld\n", ((int)time(NULL) - init_time));
@@ -1052,12 +1058,12 @@ int main(int argc, char *argv[])
       usage(argv[0]);
     if (strlen(argv[optind]) >= sizeof linebuf) {
       fprintf(stderr, "main: Argument too long\n");
-      cleanup_shtuff();
+      cleanup_shtuff(0);
       exit(-1);
     }
     strncpy(linebuf, argv[optind], strlen(argv[optind])+2);
     success = scanpath(linebuf);
   }
-  cleanup_shtuff();
+  cleanup_shtuff(0);
   return success ? 0 : 1;
 }
